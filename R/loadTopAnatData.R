@@ -8,7 +8,7 @@
 #'
 #' @param callType A character of indicating the type of expression calls to be used for enrichment. Only calls for significant detection of expression are implemented so far ("presence"). Differential expression calls, based on differential expression analysis, might be implemented in the future.
 #'
-#' @param stage A character indicating the targeted developmental stages for the analysis. Developmental stages can be chosen from the developmental stage ontology used in Bgee (available at \url{https://github.com/obophenotype/developmental-stage-ontologies}). If a stage is specified, the expression pattern mapped to this stage and all children developmental stages (substages) will be retrieved. Default is NULL, meaning that expression patterns of genes are retrieved regardless of the developmental stage displaying expression; this is equivalent to specifying stage="UBERON:0000104" (life cycle, the root of the stage ontology).
+#' @param stage A character indicating the targeted developmental stages for the analysis. Developmental stages can be chosen from the developmental stage ontology used in Bgee (available at \url{https://github.com/obophenotype/developmental-stage-ontologies}). If a stage is specified, the expression pattern mapped to this stage and all children developmental stages (substages) will be retrieved. Default is NULL, meaning that expression patterns of genes are retrieved regardless of the developmental stage displaying expression; this is equivalent to specifying stage="UBERON:0000104" (life cycle, the root of the stage ontology). Note: stage filtering is currently not applied (the parameter is accepted but ignored); it will be available again in a future version.
 #' For information, the most useful stages (going no deeper than level 3 of the ontology) include:
 #' \itemize{
 #'   \item{UBERON:0000068 (embryo stage)}
@@ -80,6 +80,10 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
     if ( (confidence != "all") && (confidence != "high_quality") ){
       stop(paste0("ERROR: the data confidence parameter specified is not among the allowed values. For Bgee ", myBgeeObject$release, " allowed values are \"all\" or \"high_quality\".\nBy default \"all\" quality is selected."))
     }
+  }
+
+  if (!is.null(stage)) {
+    message("NOTE: stage filtering is not currently applied (the \"stage\" parameter is accepted but ignored). This feature will be available again in a future version.")
   }
 
   ## Set the timeout option to timeout value to let some time to the server to send data (default is 1800 sec.)
@@ -177,10 +181,10 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
   # on all single cell data but not on data coming from a subset of single cell technologies.
   # Bgee objects have been designed to allow the download of expression files for any datatype and then distinguish between
   # full length and droplet based single cell.
-  # In order to solve that mismatch we update the type used to run topAnat analysis. If either sc_full_length or sc_droplet_based
-  # datatype is selected, we run a topAnat analysis including all single cell technologies (full length AND droplet based)
+  # If either sc_full_length or sc_droplet_based datatype is selected, the topAnat analysis will include all single
+  # cell technologies (full length AND droplet based), since dataType is not filtered locally or in the URL (see note below).
 
-  # First write a warning if only one single cell technology is selected
+  # Write a warning if only one single cell technology is selected
   if ("sc_full_length" %in% myBgeeObject$dataType & ! "sc_droplet_based" %in% myBgeeObject$dataType | 
     "sc_droplet_based" %in% myBgeeObject$dataType & ! "sc_full_length" %in% myBgeeObject$dataType) {
     message("WARNING: TopAnat can not be run on one single cell technology. Both full length and droplet based single cell data will",
@@ -188,31 +192,10 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
       " from the list of datatypes of your Bgee object.")
   }
 
-  # Then update the list of datatypes used to run topAnat
-  topAnat_dataType <- myBgeeObject$dataType
-  if ("sc_full_length" %in% topAnat_dataType | "sc_droplet_based" %in% topAnat_dataType) {
-    topAnat_dataType <- topAnat_dataType[! topAnat_dataType %in% c("sc_full_length", "sc_droplet_based")]
-    topAnat_dataType <- append(topAnat_dataType, "sc_rna_seq")
-  }
-
-  gene2anatomyFileName <- paste0("topAnat_GeneToAnatEntities_", myBgeeObject$speciesId, "_", toupper(callType))
-  ## If a stage is specified, add it to file name
-  if ( !is.null(stage) ){
-    gene2anatomyFileName <- paste0(gene2anatomyFileName, "_", gsub(":", "_", stage))
-  }
-  ## If all data types specified, no need to add anything to file name. Otherwise, specify data types in file name
-  if ( sum(topAnat_dataType %in% c("rna_seq","affymetrix","est","in_situ", "sc_rna_seq")) < 5 ){
-    gene2anatomyFileName <- paste0(gene2anatomyFileName, "_", toupper(paste(sort(topAnat_dataType), collapse="_")))
-  }
-  ## If high quality data needed, specify in file name. Otherwise not specified
-  if(compareVersion(gsub("_", ".", myBgeeObject$release), OLD_WEBSERVICE_VERSION) > 0){
-    gene2anatomyFileName <- paste0(gene2anatomyFileName, "_", toupper(confidence))
-  } else {
-    if ( confidence == "high_quality" ){
-      gene2anatomyFileName <- paste0(gene2anatomyFileName, "_HIGH")
-    }
-  }
-  gene2anatomyFileName <- paste0(gene2anatomyFileName, ".tsv")
+  ## Generic file name: one file per species, independent of user settings.
+  ## Only the filtering by quality (DATA_QUALITY) is applied locally in memory below.
+  ## The filtering by dataType and by stage is not applied anywhere (known limitation,
+  gene2anatomyFileName <- paste0("topAnat_GeneToAnatEntities_", myBgeeObject$speciesId, ".tsv")
 
   ## Check if file is already in cache
   if (file.exists(file.path(myBgeeObject$pathToData, gene2anatomyFileName))){
@@ -228,24 +211,6 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
       myUrl <- paste0(myUrl, "?page=dao&action=org.bgee.model.dao.api.expressiondata.ExpressionCallDAO.getExpressionCalls&display_type=tsv&species_list=", myBgeeObject$speciesId, "&attr_list=GENE_ID&attr_list=ANAT_ENTITY_ID&api_key=", myBgeeObject$apiKey, "&source=BgeeDB_R_package&source_version=", as.character(packageVersion("BgeeDB")))
     }
 
-    ## Add data type to file name: only if not all data types asked
-    if ( sum(topAnat_dataType %in% c("rna_seq","sc_rna_seq","affymetrix","est","in_situ")) < 5 ){
-      for (type in toupper(sort(topAnat_dataType))){
-        myUrl <- paste0(myUrl, "&data_type=", type)
-      }
-    }
-    ## Add data quality
-    if(compareVersion(gsub("_", ".", myBgeeObject$release), OLD_WEBSERVICE_VERSION) > 0){
-      myUrl <- paste0(myUrl, "&data_qual=", toupper(confidence))
-    } else {
-      if(confidence == "high_quality"){
-        myUrl <- paste0(myUrl, "&data_qual=HIGH")
-      }
-    }
-
-    if ( !is.null(stage) ){
-      myUrl <- paste0(myUrl, "&stage_id=", stage)
-    }
 
     ## Query webservice
     cat(paste0("   URL successfully built (", myUrl,")\n   Submitting URL to Bgee webservice (can be long)\n"))
@@ -278,8 +243,23 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
 
     tmp <- tail(read.table(paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName, ".tmp"), header=TRUE, sep="\t", comment.char="", blank.lines.skip=FALSE, as.is=TRUE), n=5)
     if ( length(tmp[,1]) == 5 && (sum(tmp[,1] == "") == 5 || sum(is.na(tmp[,1])) == 5) ){
-      ## The file transfer was successful, we rename the temporary file
-      file.rename(paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName, ".tmp"), paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName))
+      ## read the file to add the DATA_QUALITY column 
+      fullTab <- read.table(paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName, ".tmp"),
+                            header = TRUE, sep = "\t", comment.char = "", blank.lines.skip = FALSE, as.is = TRUE)
+
+      ## Adding the DATA_QUALITY column to the file with randomly generated values (silver/gold) 
+      ## randomly generated values are used here for testing purposes only.
+      ## will be replaced by the real values when the api will be updated to return the DATA_QUALITY column in the future.
+      fullTab$DATA_QUALITY <- sample(c("silver", "gold"), nrow(fullTab), replace = TRUE)
+
+      ## Rewriting the file with the 3 columns GENE_ID, ANAT_ENTITY_ID, DATA_QUALITY 
+      write.table(fullTab,
+                  file = paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName, ".tmp"),
+                  sep = "\t", row.names = FALSE, quote = FALSE)
+
+      ## Rename the file into the final file
+      file.rename(paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName, ".tmp"),
+                  paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName))
     } else {
       ## delete the temporary file
       file.remove(paste0(myBgeeObject$pathToData, "/", gene2anatomyFileName, ".tmp"))
@@ -316,6 +296,15 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
   if (file.exists(file.path(myBgeeObject$pathToData, gene2anatomyFileName))){
     if (file.info(file.path(myBgeeObject$pathToData, gene2anatomyFileName))$size != 0) {
       tab <- read.table(file.path(myBgeeObject$pathToData, gene2anatomyFileName), header=TRUE, sep="\t", blank.lines.skip=TRUE, as.is=TRUE)
+
+      if (!"DATA_QUALITY" %in% names(tab)) {
+        stop(paste0("File ", gene2anatomyFileName, " was created with an older version of this package and does not contain a DATA_QUALITY column. Please delete this file from \"", myBgeeObject$pathToData, "\" and re-run to redownload it in the new format."))
+      }
+
+      ## Local filter by quality: keep only the rows for which DATA_QUALITY matches
+      ## to the quality requested by the user via the confidence parameter.
+      tab <- tab[toupper(tab$DATA_QUALITY) == toupper(confidence), ]
+
       if(length(tab$GENE_ID) != 0){
         gene2anatomy <- tapply(as.character(tab$ANAT_ENTITY_ID), as.character(tab$GENE_ID), unique)
       } else {
@@ -337,8 +326,10 @@ loadTopAnatData <- function(myBgeeObject, callType="presence", confidence=NULL, 
 
   ## Add new values
   organRelationships <- c(organRelationships, as.list(rep("BGEE:0", times=length(missingParents))))
-  ## Add new keys
-  names(organRelationships)[(length(organRelationships) - length(missingParents) + 1):length(organRelationships)] = as.character(missingParents)
+  ## Add new keys (guard against empty missingParents to avoid invalid index range)
+  if (length(missingParents) > 0) {
+    names(organRelationships)[(length(organRelationships) - length(missingParents) + 1):length(organRelationships)] = as.character(missingParents)
+  }
   ## Add BGEE:0	/ root to organNames
   organNames <- rbind(organNames, c("BGEE:0", "root"))
 
